@@ -16,6 +16,8 @@ categories = ["cryptography", "network-programming"]
 default = []
 mip04 = []
 debug-examples = []
+openmls-js = ["openmls/js"]
+openmls-wasi = ["openmls/wasi"]
 
 [dependencies]
 hex = { workspace = true, features = ["std"] }
