@@ -20,7 +20,9 @@ use mdk_storage_traits::GroupId;
 use mdk_storage_traits::groups::types::{Group, GroupExporterSecret, GroupRelay};
 use mdk_storage_traits::messages::types::{Message, ProcessedMessage};
 use mdk_storage_traits::welcomes::types::{ProcessedWelcome, Welcome};
+use mdk_storage_traits::MdkStorageError;
 use nostr::EventId;
+use serde::{Deserialize, Serialize};
 
 use crate::mls_storage::GroupDataType;
 
@@ -132,6 +134,135 @@ pub struct MemoryStorageSnapshot {
     pub(crate) messages: HashMap<EventId, Message>,
     pub(crate) messages_by_group: HashMap<GroupId, HashMap<EventId, Message>>,
     pub(crate) processed_messages: HashMap<EventId, ProcessedMessage>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct SerializableMemoryStorageSnapshot {
+    // MLS data
+    pub mls_group_data: Vec<(Vec<u8>, u8, Vec<u8>)>,
+    pub mls_own_leaf_nodes: HashMap<Vec<u8>, Vec<Vec<u8>>>,
+    pub mls_proposals: HashMap<(Vec<u8>, Vec<u8>), Vec<u8>>,
+    pub mls_key_packages: HashMap<Vec<u8>, Vec<u8>>,
+    pub mls_psks: HashMap<Vec<u8>, Vec<u8>>,
+    pub mls_signature_keys: HashMap<Vec<u8>, Vec<u8>>,
+    pub mls_encryption_keys: HashMap<Vec<u8>, Vec<u8>>,
+    pub mls_epoch_key_pairs: HashMap<(Vec<u8>, Vec<u8>, u32), Vec<u8>>,
+
+    // MDK data
+    pub groups: HashMap<GroupId, Group>,
+    pub groups_by_nostr_id: HashMap<[u8; 32], Group>,
+    pub group_relays: HashMap<GroupId, BTreeSet<GroupRelay>>,
+    pub group_exporter_secrets: HashMap<(GroupId, u64), GroupExporterSecret>,
+    pub welcomes: HashMap<EventId, Welcome>,
+    pub processed_welcomes: HashMap<EventId, ProcessedWelcome>,
+    pub messages: HashMap<EventId, Message>,
+    pub messages_by_group: HashMap<GroupId, HashMap<EventId, Message>>,
+    pub processed_messages: HashMap<EventId, ProcessedMessage>,
+}
+
+impl TryFrom<MemoryStorageSnapshot> for SerializableMemoryStorageSnapshot {
+    type Error = MdkStorageError;
+
+    fn try_from(snapshot: MemoryStorageSnapshot) -> Result<Self, Self::Error> {
+        let mut mls_group_data = Vec::with_capacity(snapshot.mls_group_data.len());
+        for ((group_id, data_type), data) in snapshot.mls_group_data {
+            mls_group_data.push((group_id, encode_group_data_type(data_type), data));
+        }
+        Ok(Self {
+            mls_group_data,
+            mls_own_leaf_nodes: snapshot.mls_own_leaf_nodes,
+            mls_proposals: snapshot.mls_proposals,
+            mls_key_packages: snapshot.mls_key_packages,
+            mls_psks: snapshot.mls_psks,
+            mls_signature_keys: snapshot.mls_signature_keys,
+            mls_encryption_keys: snapshot.mls_encryption_keys,
+            mls_epoch_key_pairs: snapshot.mls_epoch_key_pairs,
+            groups: snapshot.groups,
+            groups_by_nostr_id: snapshot.groups_by_nostr_id,
+            group_relays: snapshot.group_relays,
+            group_exporter_secrets: snapshot.group_exporter_secrets,
+            welcomes: snapshot.welcomes,
+            processed_welcomes: snapshot.processed_welcomes,
+            messages: snapshot.messages,
+            messages_by_group: snapshot.messages_by_group,
+            processed_messages: snapshot.processed_messages,
+        })
+    }
+}
+
+impl TryFrom<SerializableMemoryStorageSnapshot> for MemoryStorageSnapshot {
+    type Error = MdkStorageError;
+
+    fn try_from(snapshot: SerializableMemoryStorageSnapshot) -> Result<Self, Self::Error> {
+        let mut mls_group_data = HashMap::with_capacity(snapshot.mls_group_data.len());
+        for (group_id, data_type, data) in snapshot.mls_group_data {
+            mls_group_data.insert((group_id, decode_group_data_type(data_type)?), data);
+        }
+        Ok(Self {
+            mls_group_data,
+            mls_own_leaf_nodes: snapshot.mls_own_leaf_nodes,
+            mls_proposals: snapshot.mls_proposals,
+            mls_key_packages: snapshot.mls_key_packages,
+            mls_psks: snapshot.mls_psks,
+            mls_signature_keys: snapshot.mls_signature_keys,
+            mls_encryption_keys: snapshot.mls_encryption_keys,
+            mls_epoch_key_pairs: snapshot.mls_epoch_key_pairs,
+            groups: snapshot.groups,
+            groups_by_nostr_id: snapshot.groups_by_nostr_id,
+            group_relays: snapshot.group_relays,
+            group_exporter_secrets: snapshot.group_exporter_secrets,
+            welcomes: snapshot.welcomes,
+            processed_welcomes: snapshot.processed_welcomes,
+            messages: snapshot.messages,
+            messages_by_group: snapshot.messages_by_group,
+            processed_messages: snapshot.processed_messages,
+        })
+    }
+}
+
+pub(crate) fn snapshot_to_bytes(snapshot: MemoryStorageSnapshot) -> Result<Vec<u8>, MdkStorageError> {
+    let serializable = SerializableMemoryStorageSnapshot::try_from(snapshot)?;
+    bincode::serialize(&serializable)
+        .map_err(|e| MdkStorageError::Serialization(format!("serialize snapshot: {e}")))
+}
+
+pub(crate) fn snapshot_from_bytes(bytes: &[u8]) -> Result<MemoryStorageSnapshot, MdkStorageError> {
+    let serializable: SerializableMemoryStorageSnapshot = bincode::deserialize(bytes)
+        .map_err(|e| MdkStorageError::Deserialization(format!("deserialize snapshot: {e}")))?;
+    MemoryStorageSnapshot::try_from(serializable)
+}
+
+fn encode_group_data_type(data_type: GroupDataType) -> u8 {
+    match data_type {
+        GroupDataType::JoinGroupConfig => 1,
+        GroupDataType::Tree => 2,
+        GroupDataType::InterimTranscriptHash => 3,
+        GroupDataType::Context => 4,
+        GroupDataType::ConfirmationTag => 5,
+        GroupDataType::GroupState => 6,
+        GroupDataType::MessageSecrets => 7,
+        GroupDataType::ResumptionPskStore => 8,
+        GroupDataType::OwnLeafIndex => 9,
+        GroupDataType::GroupEpochSecrets => 10,
+    }
+}
+
+fn decode_group_data_type(code: u8) -> Result<GroupDataType, MdkStorageError> {
+    match code {
+        1 => Ok(GroupDataType::JoinGroupConfig),
+        2 => Ok(GroupDataType::Tree),
+        3 => Ok(GroupDataType::InterimTranscriptHash),
+        4 => Ok(GroupDataType::Context),
+        5 => Ok(GroupDataType::ConfirmationTag),
+        6 => Ok(GroupDataType::GroupState),
+        7 => Ok(GroupDataType::MessageSecrets),
+        8 => Ok(GroupDataType::ResumptionPskStore),
+        9 => Ok(GroupDataType::OwnLeafIndex),
+        10 => Ok(GroupDataType::GroupEpochSecrets),
+        _ => Err(MdkStorageError::Deserialization(format!(
+            "unknown GroupDataType code {code}"
+        ))),
+    }
 }
 
 #[cfg(test)]

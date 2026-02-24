@@ -21,6 +21,7 @@ openmls_traits.workspace = true
 parking_lot.workspace = true
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json.workspace = true
+bincode.workspace = true
 
 [dev-dependencies]
 mdk-storage-traits = { workspace = true, features = ["test-utils"] }

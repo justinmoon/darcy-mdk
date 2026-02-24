@@ -401,7 +401,11 @@ where
     }
 
     /// Get the storage provider
-    pub(crate) fn storage(&self) -> &Storage {
+    /// Returns a reference to the underlying storage provider.
+    ///
+    /// This is primarily useful for advanced integrations that need
+    /// storage-specific capabilities beyond the generic MDK API.
+    pub fn storage(&self) -> &Storage {
         &self.provider.storage
     }
 }

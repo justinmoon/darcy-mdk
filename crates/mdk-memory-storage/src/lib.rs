@@ -74,7 +74,7 @@ use self::mls_storage::{
     MlsOwnLeafNodes, MlsProposals, MlsPsks, MlsSignatureKeys, STORAGE_PROVIDER_VERSION,
 };
 pub use self::snapshot::{GroupScopedSnapshot, MemoryStorageSnapshot};
-use self::snapshot::{HashMapToLruExt, LruCacheExt};
+use self::snapshot::{HashMapToLruExt, LruCacheExt, snapshot_from_bytes, snapshot_to_bytes};
 
 /// Default cache size for each LRU cache
 const DEFAULT_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(1000) {
@@ -549,6 +549,20 @@ impl MdkMemoryStorage {
         snapshot
             .processed_messages
             .restore_to_lru(&mut inner.processed_messages_cache);
+    }
+
+    /// Creates a full storage snapshot serialized as bytes.
+    ///
+    /// This is suitable for persistence across process restarts.
+    pub fn create_snapshot_bytes(&self) -> Result<Vec<u8>, MdkStorageError> {
+        snapshot_to_bytes(self.create_snapshot())
+    }
+
+    /// Restores full storage state from serialized snapshot bytes.
+    pub fn restore_snapshot_bytes(&self, bytes: &[u8]) -> Result<(), MdkStorageError> {
+        let snapshot = snapshot_from_bytes(bytes)?;
+        self.restore_snapshot(snapshot);
+        Ok(())
     }
 
     // ========================================================================
