@@ -159,6 +159,12 @@ impl BlossomHttpTransport {
         self.resume = Some(resume);
         self
     }
+    /// Resource policy for the dedicated Darcy agent fork; protocol validation
+    /// keeps its independent 512 MiB ceiling.
+    pub(crate) fn for_agent_voice_download(self) -> Self {
+        self.with_download_limit(20 * 1024 * 1024)
+    }
+
     pub(crate) fn with_download_limit(mut self, limit: u64) -> Self {
         self.download_limit = limit.min(MAX_ENCRYPTED_MEDIA_BLOB_BYTES);
         self

@@ -5674,14 +5674,26 @@ fn media_download_subdir_is_stable_and_content_derived() {
     );
 }
 
-#[test]
-fn safe_media_filename_strips_path_traversal() {
-    use crate::messaging::safe_media_filename;
-    assert_eq!(safe_media_filename("a.png"), "a.png");
-    assert_eq!(safe_media_filename("../../etc/passwd"), "passwd");
-    assert_eq!(safe_media_filename("dir/b.jpg"), "b.jpg");
-    assert_eq!(safe_media_filename(".."), "media");
-    assert_eq!(safe_media_filename(""), "media");
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overlapping_media_handoffs_have_private_unique_inodes_and_independent_cleanup() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (first, second) = tokio::join!(
+        crate::messaging::write_media_handoff(dir.path(), b"same voice note"),
+        crate::messaging::write_media_handoff(dir.path(), b"same voice note"),
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_ne!(first, second);
+    let a = std::fs::metadata(&first).unwrap();
+    let b = std::fs::metadata(&second).unwrap();
+    assert_ne!(a.ino(), b.ino());
+    assert_eq!(a.mode() & 0o777, 0o600);
+    assert_eq!(b.mode() & 0o777, 0o600);
+    assert_eq!(a.nlink(), 1);
+    assert_eq!(b.nlink(), 1);
+    std::fs::remove_file(first).unwrap();
+    assert_eq!(std::fs::read(second).unwrap(), b"same voice note");
 }
 
 #[tokio::test]
@@ -8500,4 +8512,17 @@ async fn connector_relay_list_edit_starts_from_the_newer_cached_list() {
             .any(|relay| relay == &old_entry_url),
         "the pre-edit entries the lagging relay served must not come back"
     );
+}
+
+#[test]
+fn darcy_connector_disables_automatic_attachment_network_demand() {
+    for loopback in [false, true] {
+        let config = crate::connector_app_config(loopback);
+        assert!(config.attachment_acquisition.is_none());
+        assert_eq!(
+            config.attachment_acquisition_mode,
+            marmot_app::AttachmentAcquisitionMode::HostManaged
+        );
+        assert_eq!(config.allow_loopback_relay_endpoints, loopback);
+    }
 }

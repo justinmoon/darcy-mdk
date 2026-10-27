@@ -5570,7 +5570,13 @@ impl AppClient {
             media_secret,
             default_blob_endpoints: policy.default_blob_endpoints,
             allowed_locator_kinds: policy.allowed_locator_kinds,
-            transport: self.blossom_http_transport.clone(),
+            // Dedicated Darcy host policy. Keep the protocol's 512 MiB wire
+            // ceiling intact, but stop a voice-note fetch before allocating an
+            // arbitrarily large body. The supervisor enforces 16 MiB plaintext.
+            transport: self
+                .blossom_http_transport
+                .clone()
+                .for_agent_voice_download(),
         })
     }
 

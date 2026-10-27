@@ -3399,3 +3399,63 @@ async fn file_upload_idle_watchdog_allows_setup_then_rejects_a_stalled_body() {
         AppError::MediaUploadTimedOut
     ));
 }
+
+// Darcy disables background acquisition; an explicit owner-approved download
+// must still work and must use the host's smaller network ceiling.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn darcy_explicit_media_download_works_with_automatic_acquisition_disabled_and_caps_http_body()
+ {
+    let dir = tempfile::tempdir().unwrap();
+    let home = marmot_account::AccountHome::open(dir.path());
+    home.create_account("alice").unwrap();
+    let mut config = crate::MarmotAppConfig::white_noise();
+    config.attachment_acquisition = None;
+    config.attachment_acquisition_mode = crate::AttachmentAcquisitionMode::HostManaged;
+    config.allow_loopback_blob_endpoints = true;
+    let relay = Arc::new(crate::tests::ScriptedPushRelayClient::default());
+    let app = crate::MarmotApp::try_with_relays_and_account_home_and_config(
+        dir.path(),
+        vec!["wss://relay.example".into()],
+        home,
+        config,
+    )
+    .unwrap()
+    .with_test_relay_client(relay);
+    let mut client = app.client("alice").await.unwrap();
+    let group = client.create_group("voice", &[]).await.unwrap();
+    let (server, uploaded) = spawn_roundtrip_blob_server();
+    let request = media_upload_request(Some(server));
+    let expected = request.attachments[0].plaintext.clone();
+    let sent = client.upload_media(&group, request).await.unwrap();
+    let reference = sent.attachments[0].reference.clone();
+    let downloaded = client
+        .download_media(&group, reference.clone())
+        .await
+        .unwrap();
+    assert_eq!(downloaded.plaintext, expected);
+    uploaded.recv().unwrap();
+    let (mut oversized, _) = attachment_worker_fixture(b"voice note");
+    let server = spawn_http_response(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 20971521\r\nConnection: close\r\n\r\n".to_vec(),
+    );
+    oversized.locators = vec![MediaLocator {
+        kind: BLOSSOM_LOCATOR_KIND_V1.into(),
+        value: format!("{server}/{}", oversized.ciphertext_sha256),
+    }];
+    let error = download_encrypted_media_with_transport(
+        oversized,
+        &[7; 32],
+        &[],
+        &[BLOSSOM_LOCATOR_KIND_V1.into()],
+        &BlossomHttpTransport::new(true).for_agent_voice_download(),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("download exceeds 20971520 bytes"),
+        "{error}"
+    );
+}

@@ -161,20 +161,46 @@ pub(crate) fn media_download_subdir(plaintext: &[u8]) -> String {
     hex::encode(Sha256::digest(plaintext))
 }
 
-/// Map a control-plane media reference (the non-secret mirror) back into the
-/// app-runtime `MediaAttachmentReference`. Field-for-field; the content key is
-/// never part of either type, so this is a pure structural reshape.
-/// Reduce a sender-controlled media file name to a safe basename so a download
-/// cannot escape its per-blob temp dir (e.g. "../../x" -> "x"). Falls back to
-/// "media" for empty or parent-only names.
-pub(crate) fn safe_media_filename(name: &str) -> &str {
-    std::path::Path::new(name)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("media")
+/// Give every download its own private inode. Cancellation cleanup for an old
+/// request must not truncate or unlink a newer download of the same blob.
+/// Sender filenames are metadata only; never use them as filesystem names.
+pub(crate) async fn write_media_handoff(
+    dir: &std::path::Path,
+    plaintext: &[u8],
+) -> Result<std::path::PathBuf, std::io::Error> {
+    use tokio::io::AsyncWriteExt as _;
+    for _ in 0..8 {
+        let path = dir.join(hex::encode(rand::random::<[u8; 16]>()));
+        let mut file = match tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+            .await
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let written = async {
+            file.write_all(plaintext).await?;
+            file.flush().await
+        }
+        .await;
+        if let Err(error) = written {
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err(error);
+        }
+        return Ok(path);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "media handoff collision",
+    ))
 }
 
+/// Map a control-plane media reference back into the app-runtime reference.
+/// Content keys remain in the connector.
 pub(crate) fn media_ref_to_reference(media: AgentControlMediaRef) -> MediaAttachmentReference {
     MediaAttachmentReference {
         locators: media
@@ -739,10 +765,16 @@ impl AgentConnector {
         let group_id_hex = normalize_hex(group_id_hex)?;
         let group_id = GroupId::new(hex::decode(&group_id_hex)?);
         let reference = media_ref_to_reference(media);
-        let result = self
-            .runtime
-            .download_media(&account.label, &group_id, reference)
-            .await?;
+        // Bound the entire RPC before creating a plaintext temp file. If the
+        // caller cancels, the supervisor can still await this short operation
+        // and remove its handoff file; a stalled peer cannot strand it forever.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            self.runtime
+                .download_media(&account.label, &group_id, reference),
+        )
+        .await
+        .map_err(|_| ConnectorError::OperationTimedOut("media download"))??;
         // Derive a unique, stable-per-blob subdir from the connector-computed
         // hash of the decrypted bytes (never the sender-supplied
         // `ciphertext_sha256` field) so repeat downloads land in the same place
@@ -750,25 +782,7 @@ impl AgentConnector {
         // other. The hash is an opaque dir name, not an id we log.
         let subdir = media_download_subdir(&result.plaintext);
         let dir = crate::media_temp::create_media_download_dir(&subdir).await?;
-        // The file name comes from the (decrypted) sender-controlled media
-        // reference, so write under a sanitized basename: a crafted value like
-        // "../../x" must not let a download escape the per-blob temp dir.
-        let path = dir.join(safe_media_filename(&result.file_name));
-        // Create with 0600 atomically so the plaintext is never world-readable,
-        // even momentarily (no post-write chmod TOCTOU window).
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .await?;
-        use tokio::io::AsyncWriteExt as _;
-        file.write_all(&result.plaintext).await?;
-        // tokio's `write_all` hands the last chunk to a blocking task and
-        // returns early; flush so the file is complete before the agent,
-        // which checks its length against `size_bytes`, receives the path.
-        file.flush().await?;
+        let path = write_media_handoff(&dir, &result.plaintext).await?;
         Ok(AgentControlResponse::MediaDownloaded {
             path: path.to_string_lossy().into_owned(),
             media_type: result.media_type,

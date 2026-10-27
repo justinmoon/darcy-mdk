@@ -267,6 +267,16 @@ pub struct AgentConnector {
     subscription_limiter: Arc<Semaphore>,
 }
 
+// Darcy's connector may fetch a blob only after its owner policy admits the
+// message. Native automatic demand would bypass that application boundary.
+fn connector_app_config(allow_loopback_relays: bool) -> MarmotAppConfig {
+    let mut config =
+        MarmotAppConfig::white_noise().with_allow_loopback_relay_endpoints(allow_loopback_relays);
+    config.attachment_acquisition = None;
+    config.attachment_acquisition_mode = marmot_app::AttachmentAcquisitionMode::HostManaged;
+    config
+}
+
 impl AgentConnector {
     pub fn open(config: AgentConnectorConfig) -> Result<Self, ConnectorError> {
         let media_allowed_roots =
@@ -277,8 +287,7 @@ impl AgentConnector {
             &config.home,
             relays.clone(),
             account_home.clone(),
-            MarmotAppConfig::white_noise()
-                .with_allow_loopback_relay_endpoints(config.allow_loopback_relays),
+            connector_app_config(config.allow_loopback_relays),
         )?;
         let runtime = MarmotAppRuntime::new(app.clone());
         marmot_app::configure_product_analytics_from_environment(&runtime, "agent");
