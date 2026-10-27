@@ -7,6 +7,10 @@ Marmot account home, MLS state, Nostr relay IO, invite allowlists, durable encry
 composition. Agent runtimes stay thin: they run models and tools, then talk to `wn-agent` through the local
 agent-control socket.
 
+This Darcy branch adds the current authenticated member roster to `group_info` for owner-only recipient checks.
+The roster is local control data. Hosts must also constrain group administration; a separate roster read does not
+make a later send atomic with membership changes.
+
 Supported integrations, all speaking the same [`agent-control`](../agent-control) protocol to this connector:
 
 - Hermes (first supported adapter) at [`integrations/hermes/marmot`](../../integrations/hermes/marmot);

@@ -26,6 +26,10 @@ introduce a new protocol label or explicit negotiation rather than silently chan
 `group_state_changed` includes an optional `event_id_hex`: the opaque durable occurrence id shared by live events and
 storage replay. Older connectors omit it. A change kind or timestamp alone is not a safe deduplication key.
 
+`group_info` can include `member_account_ids_hex`, the current authenticated roster. Older connectors omit it.
+An owner-only host must reject a missing roster and check the exact member identities; a two-member count alone
+does not prove that the expected owner remains a recipient. Keep this local control data out of logs.
+
 Invite-policy values serialize on the wire as `deny`, `allowlist`, `any_authenticated_direct`, and
 `any_authenticated`. Deserialization also accepts the CLI spellings `any-authenticated-direct` and
 `any-authenticated`.

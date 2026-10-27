@@ -399,6 +399,14 @@ impl AgentConnector {
             .group_mls_state(&account.label, &group_id)
             .await?;
         let member_count = u32::try_from(state.member_count).unwrap_or(u32::MAX);
+        let rosters = self
+            .runtime
+            .group_member_ids_page(&account.label, std::slice::from_ref(&group_id))
+            .await?;
+        let member_account_ids_hex = rosters
+            .into_iter()
+            .next()
+            .map(|roster| roster.member_ids_hex);
         let subject = group_info_subject_from_projection(
             self.runtime
                 .chat_list_row(&account.label, &group_id_hex)
@@ -424,6 +432,7 @@ impl AgentConnector {
             group_id_hex: hex::encode(group_id.as_slice()),
             member_count,
             is_direct: state.member_count == 2,
+            member_account_ids_hex,
             subject,
             agent_created,
         })

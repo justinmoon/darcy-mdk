@@ -691,6 +691,9 @@ pub enum AgentControlResponse {
         /// True when the group has exactly two members (the agent + one peer),
         /// i.e. an effective direct conversation where the agent always replies.
         is_direct: bool,
+        /// Current authenticated roster for owner-only recipient checks.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        member_account_ids_hex: Option<Vec<String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subject: Option<String>,
     },
@@ -1379,6 +1382,44 @@ mod tests {
     }
 
     #[test]
+    fn group_info_roster_distinguishes_replacement_member_at_same_count() {
+        let original = serde_json::json!({"type":"group_info","account_id_hex":"agent","group_id_hex":"group","member_count":2,"is_direct":true,"member_account_ids_hex":["agent","owner"]});
+        let mut replacement = original.clone();
+        replacement["member_account_ids_hex"] = serde_json::json!(["agent", "replacement"]);
+        for (value, member) in [(original, "owner"), (replacement, "replacement")] {
+            let decoded: AgentControlResponse = serde_json::from_value(value).unwrap();
+            let AgentControlResponse::GroupInfo {
+                member_count: 2,
+                is_direct: true,
+                member_account_ids_hex: Some(roster),
+                ..
+            } = decoded
+            else {
+                panic!("roster lost in framing")
+            };
+            assert_eq!(roster, vec!["agent", member]);
+            let encoded = encode_frame(&AgentControlEnvelope::new(
+                Some("roster".into()),
+                AgentControlResponse::GroupInfo {
+                    account_id_hex: "agent".into(),
+                    group_id_hex: "group".into(),
+                    agent_created: true,
+                    member_count: 2,
+                    is_direct: true,
+                    member_account_ids_hex: Some(roster.clone()),
+                    subject: None,
+                },
+            ))
+            .unwrap();
+            let decoded: AgentControlEnvelope<AgentControlResponse> =
+                decode_frame(&encoded).unwrap();
+            assert!(
+                matches!(decoded.payload,AgentControlResponse::GroupInfo {member_account_ids_hex:Some(members),..} if members==roster)
+            );
+        }
+    }
+
+    #[test]
     fn group_activation_metadata_round_trips_and_defaults_to_false() {
         for agent_created in [false, true] {
             for body in [
@@ -1393,6 +1434,7 @@ mod tests {
                     agent_created,
                     member_count: 3,
                     is_direct: false,
+                    member_account_ids_hex: None,
                     subject: None,
                 },
             ] {

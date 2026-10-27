@@ -3975,6 +3975,7 @@ fn group_info_framing_preserves_named_subject_and_omits_absent_subject() {
         group_id_hex: "bb".repeat(16),
         member_count: 3,
         is_direct: false,
+        member_account_ids_hex: Some(vec!["aa".repeat(32), "bb".repeat(32), "cc".repeat(32)]),
         subject: Some("Café ☕".to_owned()),
         agent_created: false,
     };
@@ -3988,6 +3989,7 @@ fn group_info_framing_preserves_named_subject_and_omits_absent_subject() {
         group_id_hex: "bb".repeat(16),
         member_count: 2,
         is_direct: true,
+        member_account_ids_hex: None,
         subject: None,
         agent_created: false,
     };
@@ -4088,6 +4090,17 @@ async fn group_info_reads_current_chat_list_group_name_without_using_title() {
         Some("Café ☕"),
     );
     assert_eq!(round_trip_group_info(named.clone()), named);
+    let AgentControlResponse::GroupInfo {
+        member_account_ids_hex: Some(members),
+        ..
+    } = &named
+    else {
+        panic!("group_info must carry the current authenticated roster");
+    };
+    assert_eq!(members.len(), 2);
+    assert!(members.contains(&agent.account.account_id_hex));
+    assert!(members.contains(&human.account.account_id_hex));
+    assert!(!members.contains(&other_human.account.account_id_hex));
 
     let unnamed = connector
         .group_info_response(&agent.account.account_id_hex, &unnamed_group_hex)
